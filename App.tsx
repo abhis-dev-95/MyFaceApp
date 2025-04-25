@@ -1,118 +1,161 @@
-/**
- * Sample React Native App
- * https://github.com/facebook/react-native
- *
- * @format
- */
-
-import React from 'react';
-import type {PropsWithChildren} from 'react';
+import {StyleSheet, Text, View} from 'react-native';
+import React, {useEffect, useRef, useState} from 'react';
 import {
-  SafeAreaView,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  useColorScheme,
-  View,
-} from 'react-native';
-
+  useCameraDevice,
+  useFrameProcessor,
+  Camera as VisionCamera,
+} from 'react-native-vision-camera';
 import {
-  Colors,
-  DebugInstructions,
-  Header,
-  LearnMoreLinks,
-  ReloadInstructions,
-} from 'react-native/Libraries/NewAppScreen';
+  useFaceDetector,
+  Face,
+  FaceDetectionOptions,
+} from 'react-native-vision-camera-face-detector';
+import {useRunOnJS} from 'react-native-worklets-core';
 
-type SectionProps = PropsWithChildren<{
-  title: string;
-}>;
+export default function App() {
+  const device = useCameraDevice('front');
+  const [detectedFaces, setDetectedFaces] = useState<Face[]>([]);
+  const [livenessStatus, setLivenessStatus] = useState('Checking...');
+  const [recognitionResult, setRecognitionResult] = useState('Searching...');
 
-function Section({children, title}: SectionProps): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
+  const faceDetectionOptions = useRef<FaceDetectionOptions>({
+    classificationMode: 'all',
+    contourMode: 'all',
+    performanceMode: 'accurate',
+  }).current;
+
+  const {detectFaces} = useFaceDetector(faceDetectionOptions);
+
+  useEffect(() => {
+    (async () => {
+      const status = await VisionCamera.requestCameraPermission();
+      console.log({status});
+    })();
+  }, [device]);
+
+  // Update states on the main JS thread
+  const handleDetectedFaces = useRunOnJS((faces: Face[]) => {
+    setDetectedFaces(faces);
+  }, []);
+
+  const handleLivenessStatusUpdate = useRunOnJS((status: string) => {
+    setLivenessStatus(status);
+  }, []);
+
+  const handleRecognitionResultUpdate = useRunOnJS((result: string) => {
+    setRecognitionResult(result);
+  }, []);
+
+  const frameProcessor = useFrameProcessor(
+    frame => {
+      'worklet'; // Mark the function as a worklet
+
+      // Detect faces
+      const faces = detectFaces(frame);
+      if (faces.length > 0) {
+        console.log({faces: faces[0].leftEyeOpenProbability});
+
+        // Update detected faces state on the JS thread
+        handleDetectedFaces(faces);
+
+        // Integrate liveness and recognition checks here
+        const isLive = Math.random() > 0.5; // Placeholder logic for liveness check
+        handleLivenessStatusUpdate(
+          isLive ? 'Liveness Passed' : 'Liveness Failed',
+        );
+
+        if (isLive) {
+          // Facial recognition (replace with actual recognition logic)
+          const recognizedUser = faces[0].identity ? faces[0].identity : null;
+          handleRecognitionResultUpdate(
+            recognizedUser
+              ? `Recognized: ${recognizedUser}`
+              : 'Face not recognized',
+          );
+        }
+      } else {
+        // Reset if no faces are detected
+        handleDetectedFaces([]);
+        handleLivenessStatusUpdate('Checking...');
+        handleRecognitionResultUpdate('Searching...');
+      }
+    },
+    [
+      handleDetectedFaces,
+      handleLivenessStatusUpdate,
+      handleRecognitionResultUpdate,
+      detectFaces,
+    ],
+  );
+
+  if (!device) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.statusText}>No Camera Device Found</Text>
+      </View>
+    );
+  }
+
   return (
-    <View style={styles.sectionContainer}>
-      <Text
-        style={[
-          styles.sectionTitle,
-          {
-            color: isDarkMode ? Colors.white : Colors.black,
-          },
-        ]}>
-        {title}
-      </Text>
-      <Text
-        style={[
-          styles.sectionDescription,
-          {
-            color: isDarkMode ? Colors.light : Colors.dark,
-          },
-        ]}>
-        {children}
-      </Text>
+    <View style={styles.container}>
+      <VisionCamera
+        isActive
+        style={StyleSheet.absoluteFill}
+        device={device}
+        frameProcessor={frameProcessor}
+      />
+
+      {/* Overlay for displaying detected faces and status */}
+      <View style={styles.overlay}>
+        <Text style={styles.statusText}>{livenessStatus}</Text>
+        <Text style={styles.statusText}>{recognitionResult}</Text>
+        <Text style={styles.statusText}>
+          Detected Faces: {detectedFaces.length}
+        </Text>
+        <Text style={styles.statusText}>
+          is Left Eye Open:{' '}
+          {detectedFaces?.[0]?.leftEyeOpenProbability <= 0.9498605728149414
+            ? 'No'
+            : 'Yes'}
+        </Text>
+
+        {/* Render bounding boxes for faces */}
+        {detectedFaces.map((face, index) => (
+          <View
+            key={index}
+            style={{
+              position: 'absolute',
+              left: face.bounds.x,
+              top: face.bounds.y,
+              width: face.bounds.width,
+              height: face.bounds.height,
+              borderColor: 'green',
+              borderWidth: 2,
+            }}
+          />
+        ))}
+      </View>
     </View>
   );
 }
 
-function App(): React.JSX.Element {
-  const isDarkMode = useColorScheme() === 'dark';
-
-  const backgroundStyle = {
-    backgroundColor: isDarkMode ? Colors.darker : Colors.lighter,
-  };
-
-  return (
-    <SafeAreaView style={backgroundStyle}>
-      <StatusBar
-        barStyle={isDarkMode ? 'light-content' : 'dark-content'}
-        backgroundColor={backgroundStyle.backgroundColor}
-      />
-      <ScrollView
-        contentInsetAdjustmentBehavior="automatic"
-        style={backgroundStyle}>
-        <Header />
-        <View
-          style={{
-            backgroundColor: isDarkMode ? Colors.black : Colors.white,
-          }}>
-          <Section title="Step One">
-            Edit <Text style={styles.highlight}>App.tsx</Text> to change this
-            screen and then come back to see your edits.
-          </Section>
-          <Section title="See Your Changes">
-            <ReloadInstructions />
-          </Section>
-          <Section title="Debug">
-            <DebugInstructions />
-          </Section>
-          <Section title="Learn More">
-            Read the docs to discover what to do next:
-          </Section>
-          <LearnMoreLinks />
-        </View>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
 const styles = StyleSheet.create({
-  sectionContainer: {
-    marginTop: 32,
-    paddingHorizontal: 24,
+  container: {
+    flex: 1,
+    backgroundColor: 'black',
   },
-  sectionTitle: {
-    fontSize: 24,
-    fontWeight: '600',
+  overlay: {
+    position: 'absolute',
+    top: 50,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    padding: 10,
   },
-  sectionDescription: {
-    marginTop: 8,
+  statusText: {
+    color: 'white',
     fontSize: 18,
-    fontWeight: '400',
-  },
-  highlight: {
-    fontWeight: '700',
+    marginBottom: 5,
   },
 });
-
-export default App;
